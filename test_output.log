@@ -1,0 +1,19 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.12, pytest-9.0.2, pluggy-1.6.0 -- F:\edtl\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: F:\edtl
+configfile: pyproject.toml
+collecting ... collected 3 items
+
+tests/backends/test_snowflake_backend.py::test_snowflake_backend_is_backend PASSED [ 33%]
+tests/backends/test_snowflake_backend.py::test_snowflake_raises_without_credentials PASSED [ 66%]
+tests/backends/test_snowflake_backend.py::test_snowflake_backend_connects PASSED [100%]
+
+============================== warnings summary ===============================
+tests/backends/test_snowflake_backend.py::test_snowflake_backend_connects
+  F:\edtl\.venv\Lib\site-packages\ibis\backends\snowflake\__init__.py:325: UserWarning: Unable to create Ibis UDFs, some functionality will not work: 000606 (57P03): No active warehouse selected in the current session.  Select an active warehouse with the 'use warehouse' command.
+  
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 3 passed, 1 warning in 3.21s =========================

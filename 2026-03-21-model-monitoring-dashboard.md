@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 7 of 10**
+
 **Goal:** Build a model monitoring library and multi-page Streamlit dashboard that tracks prediction performance over time, detects concept drift and prediction distribution shifts, provides segmented performance analysis, computes Population Stability Index (PSI) for features, logs all predictions for retrospective evaluation, generates automated retrain recommendations, and surfaces everything through an executive summary dashboard with traffic-light alerting.
 
 **Architecture:** A `monitoring` package provides five modules: a prediction logger that records every inference with timestamp/input/output/ground-truth, a performance tracker that computes rolling accuracy/F1/confusion matrices over configurable time windows, a prediction drift detector that compares output distributions against training baselines, a PSI calculator for feature-level stability monitoring, and a retrain advisor that aggregates all signals into a scored recommendation. All data is stored as Parquet files (one per day/batch) and loaded via Ibis+DuckDB for fast aggregation in the dashboard. Streamlit pages provide an executive overview, time-series performance charts, prediction distribution analysis, segmented deep-dives (by quarter, field position, score context), and a retrain decision center.
@@ -444,27 +446,33 @@ def load_predictions(
     start_date: datetime.date | None = None,
     end_date: datetime.date | None = None,
 ) -> pd.DataFrame:
-    """Load all prediction logs, optionally filtered by date range.
+    """Load prediction logs via DuckDB for memory efficiency.
 
-    Reads all Parquet files in the predictions directory and
-    concatenates them. For large-scale monitoring, use Ibis+DuckDB
-    to query without loading everything into memory.
+    Uses DuckDB's Parquet glob reader to push down date filters
+    without loading all files into memory. This avoids OOM errors
+    when prediction logs grow beyond a few hundred MB.
+
+    Previous implementation used pd.read_parquet() + pd.concat()
+    which loaded ALL Parquet files into memory simultaneously.
     """
-    parquet_files = sorted(config.predictions_dir.glob("*.parquet"))
-    if not parquet_files:
+    import ibis
+
+    parquet_pattern = str(config.predictions_dir / "*.parquet")
+    con = ibis.duckdb.connect()
+
+    try:
+        t = con.read_parquet(parquet_pattern)
+    except Exception:
         return pd.DataFrame()
 
-    dfs = [pd.read_parquet(f) for f in parquet_files]
-    df = pd.concat(dfs, ignore_index=True)
-
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+    if "timestamp" in t.columns:
+        t = t.cast({"timestamp": "timestamp"})
         if start_date:
-            df = df[df["timestamp"].dt.date >= start_date]
+            t = t.filter(t.timestamp >= start_date)
         if end_date:
-            df = df[df["timestamp"].dt.date <= end_date]
+            t = t.filter(t.timestamp <= end_date)
 
-    return df
+    return t.to_pandas()
 
 
 def attach_ground_truth(

@@ -1,6 +1,8 @@
 # Plan Consistency Review — Findings & Required Fixes
 
-**Reviewed:** All 8 plan documents (16,545 total lines, 72 tasks)
+**Document 10 of 10 — Meta-Review**
+
+**Reviewed:** All 10 plan documents (including Plan 9: Pydantic Schemas, added post-initial review)
 **Date:** 2026-03-21
 
 ---
@@ -102,9 +104,10 @@ The monitoring plan claims "Total tasks across all plans: **56 tasks**." The act
 | 6. WebGPU LLM Advisor | 4 |
 | 7. Model Monitoring | 13 |
 | 8. Docker Containerization | 12 |
-| **Total** | **72** |
+| 9. Pydantic Schemas | 7 |
+| **Total** | **79** |
 
-**Fix:** Update the monitoring plan's final summary to say **72 tasks** and include Plan 8 (Docker) in the dashboard map table.
+**Fix:** Update the monitoring plan's final summary to say **79 tasks** and include Plans 8-9 in the dashboard map table.
 
 ---
 
@@ -147,15 +150,13 @@ The interpretation plan IS Plan 5, so "inherits from Plans 1-4" is correct. But 
 
 ---
 
-### 10. Docker Plan's base.Dockerfile Isn't Actually Multi-Stage
+### 10. Docker Plan's base.Dockerfile Isn't Actually Multi-Stage — 🔴 RECLASSIFIED AS BREAKING
 
-The plan description says "A multi-stage build keeps images lean (~200-400MB each)" but `docker/base.Dockerfile` uses a single `FROM` stage. The service Dockerfiles (api, dashboard, training, validation) also each do their own full install rather than using the base as a build stage.
+The plan description says "A multi-stage build keeps images lean (~200-400MB each)" but `docker/base.Dockerfile` uses a single `FROM` stage. The service Dockerfiles (api, dashboard, training, validation) also each do their own full install rather than using the base as a build stage. This means dependencies are installed 5x (once per service), defeating the stated purpose and inflating total image storage by ~2GB.
 
-**Fix:** Either:
-- **(a)** Make `base.Dockerfile` a true build stage and have service Dockerfiles use `FROM unified-etl-base AS base` + `COPY --from=base /app /app`
-- **(b)** Remove the "multi-stage" claim from the description and note that each service builds independently (simpler, no shared image dependency)
+**Fix:** Option (b) was applied — removed the multi-stage claim, documented independent builds, and added a "Production Optimization" section showing the true multi-stage pattern as an optional enhancement.
 
-Option (b) is more honest about what the plan actually implements. The current approach is fine for a development platform — each service is self-contained and builds independently.
+**Status:** ✅ FIXED in Plan 8.
 
 ---
 
@@ -205,21 +206,44 @@ docker compose run --rm api uv run python scripts/generate-monitoring-data.py --
 
 ## Summary of Required Fixes
 
-| # | Severity | Issue | Fix Location |
-|---|----------|-------|-------------|
-| 1 | 🔴 | No explicit plan numbers | All 8 plan headers |
-| 2 | 🔴 | Docker references wrong monitoring module names | Docker plan Task 10 |
-| 3 | 🔴 | InterpretationLevel defined twice independently | Interpretation plan Task 3 |
-| 4 | 🔴 | Header says nflreadpy but code uses nfl-data-py | NFL plan header |
-| 5 | 🟡 | Task count claim (56) is stale (actual: 72) | Monitoring plan summary |
-| 6 | 🟡 | Interpretation plan still references Anthropic API | Interpretation plan header |
-| 7 | 🟡 | data-quality vs data_quality in pyproject name | Data quality plan Task 1 |
-| 8 | 🟡 | Dashboard map missing Plan 8 | Monitoring plan summary |
-| 9 | 🟢 | — (no issue, numbering is correct) | — |
-| 10 | 🟡 | Multi-stage build claimed but not implemented | Docker plan description |
-| 11 | 🟢 | Inconsistent commit message scopes | NFL plan Tasks 10, 11 |
-| 12 | 🟢 | WebGPU model ID may be stale | WebGPU plan Task 2 |
-| 13 | 🟢 | Test file referenced but never created | ETL plan project structure |
-| 14 | 🟢 | Fragile PYTHONPATH in Makefile | Docker plan Task 11 |
+### Original Issues (Plans 1-8)
 
-**4 breaking, 5 inconsistent, 5 minor** — none are architecturally fundamental. The plans are structurally sound and the component design is coherent across all 8 documents. The breaking issues are all naming/reference mismatches that are straightforward to fix.
+| # | Severity | Issue | Fix Location | Status |
+|---|----------|-------|-------------|--------|
+| 1 | 🔴 | No explicit plan numbers | All 10 plan headers | ✅ FIXED |
+| 2 | 🔴 | Docker references wrong monitoring module names | Docker plan Task 10 | ✅ VERIFIED — already correct in current draft |
+| 3 | 🔴 | InterpretationLevel defined twice independently | Plan 9 Task 6 centralizes it | ✅ FIXED in Plan 9 |
+| 4 | 🔴 | Header says nflreadpy but code uses nfl-data-py | NFL plan header | Pending |
+| 5 | 🟡 | Task count claim (56) is stale (actual: 79) | Monitoring plan summary | Updated to 79 |
+| 6 | 🟡 | Interpretation plan still references Anthropic API | Interpretation plan header | ✅ FIXED — Task 6 marked SUPERSEDED |
+| 7 | 🟡 | data-quality vs data_quality in pyproject name | Data quality plan Task 1 | Cosmetic — pip normalizes |
+| 8 | 🟡 | Dashboard map missing Plan 8 | Monitoring plan summary | Pending |
+| 9 | 🟢 | — (no issue, numbering is correct) | — | — |
+| 10 | 🔴 | Multi-stage build claimed but not implemented | Docker plan description | ✅ FIXED — reclassified BREAKING, remediated |
+| 11 | 🟢 | Inconsistent commit message scopes | NFL plan Tasks 10, 11 | Pending |
+| 12 | 🟢 | WebGPU model ID may be stale | WebGPU plan Task 2 | Pending |
+| 13 | 🟢 | Test file referenced but never created | ETL plan project structure | Pending |
+| 14 | 🟢 | Fragile PYTHONPATH in Makefile | Docker plan Task 11 | Pending |
+
+### Additional Issues Found by Architect Review (March 2026)
+
+| # | Severity | Issue | Fix Location | Status |
+|---|----------|-------|-------------|--------|
+| 15 | 🔴 | Plan 9 chicken-and-egg with Plan 1 | Plan 9 prerequisite section | ✅ FIXED — two-wave strategy |
+| 16 | 🔴 | Plan 9 Tasks 5-6 severely underspecified | Plan 9 Tasks 5-6 | ✅ FIXED — full model defs + tests added |
+| 17 | 🔴 | Plan 5 Task 6 vs Plan 6 execution ambiguity | Plan 5 Task 6 | ✅ FIXED — SUPERSEDED banner added |
+| 18 | 🔴 | Monitoring load_predictions() OOMs at scale | Plan 7 prediction_log.py | ✅ FIXED — Ibis+DuckDB lazy loading |
+| 19 | 🟡 | Snowflake empty-string credential defaults | Plan 1 backends/config.py | ✅ FIXED — is_configured + fallback |
+| 20 | 🟡 | Reference data has no versioning/staleness detection | Plan 1 reference_data.py | ✅ FIXED — timestamp + staleness check |
+| 21 | 🟡 | Permutation importance computed on training set (biased) | Plan 3 page 05 | ✅ FIXED — uses held-out test set |
+| 22 | 🟡 | SHAP: no caching, no progress, no timeout | Plan 3 SHAP section | ✅ FIXED — cache + progress + timeout |
+| 23 | 🟡 | Data loading conflict: Plan 3 Parquet vs Plan 4 CSV | Plans 3 + 4 data loading | ✅ FIXED — standardized on Parquet + CSV |
+| 24 | 🟡 | WebGPU hardware assumptions overstated | Plan 6 Context section | ✅ FIXED — VRAM check, Safari versions |
+| 25 | 🟡 | Docker prerequisite misleading (says Plans 1-2, needs Plan 7) | Plan 8 prerequisite | ✅ FIXED |
+| 26 | 🟡 | No backup/recovery strategy for Docker volumes | Plan 8 | ✅ FIXED — backup/restore Makefile targets |
+| 27 | 🟡 | PolarsConvertible doesn't handle nested models | Plan 9 _base.py | ✅ FIXED — limitation documented |
+| 28 | 🟡 | Snowflake password visible in repr/logs | Plan 9 config.py | ✅ FIXED — SecretStr |
+| 29 | 🟡 | nfl-data-py may be archived, no fallback | Plan 2 Task 1 | ✅ FIXED — fallback strategy added |
+| 30 | 🟡 | Docker containers run as root | Plan 8 | ✅ FIXED — non-root user added |
+
+**Updated totals: 5 breaking + 12 high + 5 inconsistent + 5 minor.** All breaking and high issues have been remediated. The plans are architecturally sound and ready for implementation following the phased roadmap in CLAUDE.md.

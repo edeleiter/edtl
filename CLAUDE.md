@@ -8,20 +8,34 @@ This is a **planning workspace** containing implementation plans for a unified-e
 
 ## Plan Documents and Execution Order
 
-Plans must be implemented in dependency order. The consistency review (`2026-03-21-consistency-review.md`) documents cross-plan conflicts that must be resolved during implementation.
+Plans must be implemented in a phased dependency order. Plan 9 (schemas) uses a two-wave strategy — Wave 1 alongside Plan 1, Wave 2 after the domain plans are built.
 
-| Order | File | Description |
-|-------|------|-------------|
-| 1 | `2026-03-21-pydantic-schemas.md` (Plan 9) | Central `schemas` package — implement FIRST, all other plans depend on it |
-| 2 | `2026-03-21-unified-etl-framework.md` (Plan 1) | Core monorepo: Ibis transforms, backends, FastAPI, Streamlit |
-| 3 | `2026-03-21-nfl-fourth-down-ml-pipeline.md` (Plan 2) | NFL data ingestion, XGBoost model training, inference API |
-| 4 | `2026-03-21-feature-selection-ui.md` (Plan 3) | Feature importance (SHAP, Gini, permutation), interactive selection |
-| 5 | `2026-03-21-data-quality-validation-ui.md` (Plan 4) | Schema validation, drift detection, business rules |
-| 6 | `2026-03-21-statistical-interpretation-engine.md` (Plan 5) | Plain-English interpretation of all statistical outputs |
-| 7 | `2026-03-21-webgpu-llm-advisor.md` (Plan 6) | In-browser Qwen 2.5 1.5B via WebGPU (replaces Plan 5 Task 6) |
-| 8 | `2026-03-21-model-monitoring-dashboard.md` (Plan 7) | Performance tracking, PSI, drift detection, retrain advisor |
-| 9 | `2026-03-21-docker-containerization.md` (Plan 8) | Docker Compose orchestration for full stack |
-| 10 | `2026-03-21-consistency-review.md` | Meta-review: identifies breaking/inconsistent issues across all plans |
+| Phase | Plans | Description |
+|-------|-------|-------------|
+| 1 | Plan 9 Wave 1 (Tasks 1-3) + Plan 1 | Foundation: schemas base + monorepo + transforms + backends |
+| 2 | Plan 2 | NFL data ingestion, XGBoost training, inference API |
+| 3 | Plans 3 + 4 + Plan 9 Task 4 | Feature analysis UI + data quality UI (parallelizable) |
+| 4 | Plans 5 + 6 + Plan 9 Tasks 5-6 | Interpretation engine + WebGPU LLM advisor |
+| 5 | Plan 7 | Model monitoring dashboard |
+| 6 | Plan 8 | Docker Compose containerization |
+| 7 | Integration sweep | Replace all local dataclasses with `schemas` imports |
+
+### File Index
+
+| File | Plan # | Tasks |
+|------|--------|-------|
+| `2026-03-21-pydantic-schemas.md` | Plan 9 of 10 | 7 (two-wave) |
+| `2026-03-21-unified-etl-framework.md` | Plan 1 of 10 | 11 |
+| `2026-03-21-nfl-fourth-down-ml-pipeline.md` | Plan 2 of 10 | 11 |
+| `2026-03-21-feature-selection-ui.md` | Plan 3 of 10 | 7 |
+| `2026-03-21-data-quality-validation-ui.md` | Plan 4 of 10 | 8 |
+| `2026-03-21-statistical-interpretation-engine.md` | Plan 5 of 10 | 6 |
+| `2026-03-21-webgpu-llm-advisor.md` | Plan 6 of 10 | 4 |
+| `2026-03-21-model-monitoring-dashboard.md` | Plan 7 of 10 | 13 |
+| `2026-03-21-docker-containerization.md` | Plan 8 of 10 | 12 |
+| `2026-03-21-consistency-review.md` | Doc 10 of 10 | Meta-review |
+
+**Total: 79 tasks across 9 plans.**
 
 ## Key Architectural Decisions (From Plans)
 
@@ -29,11 +43,16 @@ Plans must be implemented in dependency order. The consistency review (`2026-03-
 - **Monorepo with `uv` workspaces:** Packages at `packages/` — `transforms`, `backends`, `schemas`, `api`, `dashboard`, `nfl`, `ml`, `data_quality`, `monitoring`
 - **Pydantic v2 strict mode** for all data contracts (Plan 9); no package defines its own models
 - **Validate at boundaries, trust internally** — Pydantic validation at system edges only
+- **Two-wave schema strategy** — Plan 9 Wave 1 (core models) alongside Plan 1, Wave 2 (domain models) after Plans 4/5/7
+- **DuckDB-only development mode** — Snowflake is optional; all features work with DuckDB when `SNOWFLAKE_ACCOUNT` is not set
 - **Tech stack:** Python 3.11+, Ibis 9.x, DuckDB, Snowflake, FastAPI, Streamlit, XGBoost, scikit-learn, SHAP, Plotly, Docker Compose, Caddy
 
 ## Working With These Plans
 
 - Every plan starts with `> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans` — follow this directive when implementing
 - Plans are self-contained with task breakdowns, file lists, test specifications, and acceptance criteria
-- The consistency review identifies breaking issues (monitoring package has two incompatible designs, plan numbering gaps) — read it before implementing Plans 5-8
-- Plan 6 (WebGPU) supersedes Plan 5 Task 6 (Anthropic API Q&A)
+- The consistency review (Doc 10) tracks all cross-plan issues — 30 issues identified, all breaking/high issues remediated
+- Plan 6 (WebGPU) supersedes Plan 5 Task 6 (Anthropic API Q&A) — Plan 5 Task 6 is marked SUPERSEDED
+- Permutation importance must use held-out test data (not training data) — see Plan 3 page 05
+- Monitoring `load_predictions()` uses Ibis+DuckDB lazy loading, not pd.read_parquet (prevents OOM)
+- Docker builds are independent per service; multi-stage optimization is optional (see Plan 8 Production Optimization section)

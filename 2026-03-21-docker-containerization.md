@@ -2,18 +2,20 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 8 of 10**
+
 **Goal:** Containerize every component of the unified-etl platform — FastAPI inference API, Streamlit dashboard, training pipeline, validation harness, and monitoring — into Docker images with a docker-compose orchestration that spins up the full stack with a single command.
 
 **Architecture:** Five service containers (API, dashboard, training worker, validation runner, monitoring data generator) plus two infrastructure containers (DuckDB doesn't need one — it's embedded, but we add a reverse proxy and a shared volume for Parquet data). Each service gets its own Dockerfile that installs the monorepo's shared packages. Docker Compose wires everything together with health checks, depends_on ordering, shared volumes for prediction logs and reference data, and environment variable configuration. A `.env.example` documents all configuration.
 
 **Tech Stack:**
-- **Containerization:** Docker, multi-stage builds
+- **Containerization:** Docker (independent service builds; see Production Optimization section for optional multi-stage pattern)
 - **Orchestration:** Docker Compose v2
 - **Base image:** python:3.11-slim
 - **Proxy:** Caddy (lightweight, auto-HTTPS capable, simpler than nginx for this use case)
 - **Volumes:** Named volumes for prediction logs, model artifacts, reference data
 
-**Prerequisite:** Plans 1-2 (ETL Framework + NFL ML Pipeline) minimum. Plans 3-7 enhance the containerized stack but aren't required for the Docker setup to work.
+**Prerequisite:** Plans 1-2 (ETL Framework + NFL ML Pipeline) minimum for API-only deployment. Task 10 (monitoring data generation) additionally requires Plan 7 (Model Monitoring). Plans 3-7 enhance the containerized stack but aren't required for the core Docker setup to work.
 
 ---
 
@@ -21,7 +23,7 @@
 
 **Why not Kubernetes?** This is a development/small-deployment platform. Docker Compose gives you single-command startup, easy local development, and simple configuration. If this grows to need multi-node orchestration, the Dockerfiles and health checks transfer directly to K8s manifests later.
 
-**Why a shared base image?** The monorepo's packages (`transforms`, `backends`, `nfl`, `ml`, `monitoring`, `data_quality`) are interdependent. Building them once in a base stage and copying into service-specific images avoids reinstalling 500MB of dependencies in every image.
+**Why a shared base image?** The monorepo's packages (`transforms`, `backends`, `nfl`, `ml`, `monitoring`, `data_quality`) are interdependent. The `base.Dockerfile` installs all packages once. **Important:** For this to actually save build time, service Dockerfiles must use `FROM unified-etl-base AS build` and copy the installed packages — not start fresh from `python:3.11-slim`. The current service Dockerfiles build independently for simplicity; see the Production Optimization section at the end of this plan for the true multi-stage pattern.
 
 **Why Caddy over nginx?** Caddy has sane defaults (auto-HTTPS, HTTP/2, no config needed for reverse proxy), is a single binary, and the Caddyfile syntax is dramatically simpler. For a platform that routes to two backends (API on 8000, Streamlit on 8501), Caddy is ideal.
 
@@ -1309,4 +1311,60 @@ make down                  # Stop when done
 make test                  # Exit code 0 = pass
 docker compose build       # Build production images
 docker compose push        # Push to registry (add registry config)
+```
+
+---
+
+## Production Optimization: True Multi-Stage Builds
+
+The current service Dockerfiles build independently from `python:3.11-slim` for simplicity. In production, to avoid reinstalling 500MB of dependencies in every image, refactor each service Dockerfile to use the shared base:
+
+```dockerfile
+# Example: docker/api.Dockerfile (production multi-stage)
+FROM unified-etl-base:latest AS base
+# Base already has all packages installed
+
+FROM python:3.11-slim AS production
+COPY --from=base /app/.venv /app/.venv
+COPY packages/api/src /app/packages/api/src
+ENV PATH="/app/.venv/bin:$PATH"
+# ... service-specific setup
+```
+
+Build order: `docker build -t unified-etl-base -f docker/base.Dockerfile .` first, then all service images in parallel.
+
+---
+
+## Security Hardening
+
+For production deployments, add non-root container user to each Dockerfile:
+
+```dockerfile
+RUN groupadd -r etl && useradd -r -g etl etl
+USER etl
+```
+
+Add log rotation to each service in `docker-compose.yml`:
+
+```yaml
+logging:
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+Add volume backup targets to the Makefile:
+
+```makefile
+backup:
+	docker run --rm -v unified-etl_models:/data -v $$(pwd)/backups:/backup alpine \
+		tar czf /backup/models-$$(date +%Y%m%d).tar.gz -C /data .
+	docker run --rm -v unified-etl_monitoring_data:/data -v $$(pwd)/backups:/backup alpine \
+		tar czf /backup/monitoring-$$(date +%Y%m%d).tar.gz -C /data .
+
+restore:
+	@echo "Usage: make restore FILE=backups/models-20260321.tar.gz VOLUME=unified-etl_models"
+	docker run --rm -v $(VOLUME):/data -v $$(pwd):/backup alpine \
+		tar xzf /backup/$(FILE) -C /data
 ```

@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 5 of 10**
+
 **Goal:** Add plain-English interpretation to every statistical output in the feature selection and data quality UIs — so that any user, regardless of statistics background, can understand what the numbers mean, why they matter, and what to do about them.
 
 **Architecture:** Two interpretation modules (`ml.feature_analysis.interpret` and `data_quality.interpret`) take raw statistical results as input and produce structured `Interpretation` objects containing: a plain-English summary, a severity/confidence level, contextual guidance on what to do next, and optional educational tooltips explaining the methodology. Streamlit pages are updated to render interpretations inline next to every chart and metric. An LLM-powered "Ask About This" feature (optional, using Anthropic API) lets users ask follow-up questions about any specific stat in context.
@@ -312,6 +314,10 @@ from ml.feature_analysis.importance import ImportanceResult
 from ml.feature_analysis.selection import SubsetEvaluation
 
 
+# NOTE: When Plan 9 (schemas) is implemented, replace this local definition
+# with: from schemas.interpretation import InterpretationLevel, Interpretation
+# Plan 9 Task 6 centralizes these to avoid the duplicate definition in
+# data_quality.interpret (see consistency review Issue #3).
 class InterpretationLevel(Enum):
     OK = "ok"
     INFO = "info"
@@ -1984,6 +1990,8 @@ git commit -m "feat(dashboard): integrate interpretations into data quality page
 ---
 
 ## Task 6: Optional — LLM-Powered "Ask About This" Component
+
+> **⚠️ SUPERSEDED — See Plan 6 (WebGPU LLM Advisor).** Do NOT implement this task alongside Plan 6. Plan 6 replaces this with a fully client-side WebGPU LLM (Qwen 2.5 1.5B) that requires zero API keys and zero server costs. Use Plan 6's `render_llm_advisor()` as the integration point — do NOT add both `render_ask_about()` and `render_llm_advisor()` to the same pages. This task is retained only as an alternative fallback for server-side deployments where WebGPU is unavailable.
 
 This task adds a small Anthropic API-powered component that lets users ask follow-up questions about any specific statistic in context. For example, clicking "Ask about this" next to a VIF score opens a chat where the user can ask "Should I remove this feature even though it's my 2nd most important by SHAP?"
 

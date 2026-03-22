@@ -1,0 +1,42 @@
+-- =============================================================================
+-- Unified ETL — Snowflake Setup
+-- =============================================================================
+--
+-- Run these scripts in order in a Snowflake worksheet.
+-- Each script uses the appropriate system role (least-privilege).
+--
+-- Step 1: 01_roles_and_users.sql        (as USERADMIN + briefly SECURITYADMIN)
+--         Creates ETL_ADMIN, ETL_DEPLOYER, ETL_TRAINER, ETL_TEST_RUNNER
+--         Creates service users: ETL_DEPLOY_SVC, ETL_TRAIN_SVC, ETL_TEST_SVC
+--         >>> EDIT: Set your username and service user passwords first <<<
+--
+-- Step 2: 02_databases_and_schemas.sql  (as SYSADMIN)
+--         Creates UNIFIED_ETL database with schemas:
+--           PUBLIC, RAW, FEATURES, MODELS, MONITORING
+--         Creates UNIFIED_ETL_TEST database
+--         Creates warehouses: COMPUTE_WH, DEPLOY_WH, TEST_WH
+--
+-- Step 3: 03_grants.sql                 (as SECURITYADMIN + briefly ETL_ADMIN)
+--         Grants privileges per role (least-privilege)
+--         Transfers database ownership to ETL_ADMIN
+--         Sets up future grants for new tables
+--
+-- Step 4: 04_stages.sql                 (as ETL_DEPLOYER)
+--         Creates reference_data_stage and python_packages_stage
+--
+-- Step 5: 05_tasks.sql                  (as ETL_DEPLOYER)
+--         Creates scheduled tasks (run after deploy.py creates stored procs)
+--
+-- System Role Summary:
+--   USERADMIN      → roles + users
+--   SECURITYADMIN  → privilege grants
+--   SYSADMIN       → databases, warehouses, schemas
+--   ACCOUNTADMIN   → only used for teardown.sql (destructive reset)
+--
+-- To tear everything down (trial reset):
+--         teardown.sql                   (as ACCOUNTADMIN)
+--
+-- =============================================================================
+-- After setup, configure .env with the appropriate service user credentials.
+-- See .env.example for templates per role.
+-- =============================================================================

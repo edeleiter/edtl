@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 6 of 10**
+
 **Goal:** Replace the Anthropic API-powered "Ask About This" component with a fully client-side WebGPU LLM that runs Qwen 2.5 1.5B directly in the user's browser — zero API keys, zero server costs, full privacy.
 
 **Architecture:** A Streamlit custom component embeds an HTML/JS page (via `st.components.v1.html()`) that loads WebLLM from CDN, initializes Qwen2.5-1.5B-Instruct (q4f16_1 quantization, ~1.6GB VRAM), and provides a chat interface for asking follow-up questions about statistics. The Python side passes the statistical context as a JSON-encoded data attribute. The JS side handles model loading, caching (models persist in browser CacheStorage after first download), streaming inference, and a clean chat UI. No build toolchain needed — it's a single HTML string with inline JS.
@@ -24,9 +26,9 @@ WebGPU approach: user clicks "Ask about this" → Qwen 2.5 1.5B runs directly in
 
 The tradeoffs are real:
 - **Quality:** Qwen 1.5B is much less capable than Sonnet. It can handle "explain this VIF score" but will struggle with nuanced multi-factor reasoning.
-- **First load:** ~1.6GB model download on first use (cached in CacheStorage after that — instant on subsequent visits).
-- **Speed:** ~10-30 tokens/sec on a modern GPU (RTX 3060+), slower on integrated graphics. Your RTX 5070 Ti will handle it extremely well.
-- **Compatibility:** Requires WebGPU (Chrome 113+, Edge 113+, Firefox behind flag). Safari has partial support.
+- **First load:** ~1.6GB model download on first use (cached in CacheStorage after that — instant on subsequent visits). Add a download progress indicator showing estimated time remaining based on download speed. Add a retry button for interrupted downloads. Note: WebLLM uses CacheStorage which handles partial caches, but a network interruption during initial download requires restarting.
+- **Speed:** ~10-30 tokens/sec on a modern GPU (RTX 3060+), slower on integrated graphics. Your RTX 5070 Ti will handle it extremely well. Users with integrated GPUs or older hardware may experience degraded performance or VRAM limitations.
+- **Compatibility:** Requires WebGPU (Chrome 113+, Edge 113+, Firefox behind flag). Safari 18+ supports WebGPU via Metal backend. Safari 17 has experimental support behind a flag. Earlier versions receive the fallback message.
 
 For a stats interpretation use case, the quality tradeoff is acceptable — the questions are structured ("what does this VIF mean?"), the context is provided in full by the system prompt, and the model only needs to synthesize and explain rather than reason from scratch.
 
@@ -96,16 +98,24 @@ def get_webgpu_check_script() -> str:
                 return { available: false, reason: 'No WebGPU adapter found. Your GPU may not be supported.' };
             }
             const info = await adapter.requestAdapterInfo();
+            const maxBuf = adapter.limits.maxBufferSize;
+            const vramWarning = (maxBuf < 2 * 1024 * 1024 * 1024)
+                ? 'Your GPU may not have enough memory for the LLM model. The advisor may fail to load.'
+                : null;
             return {
                 available: true,
                 gpu: info.description || info.device || 'Unknown GPU',
                 vendor: info.vendor || 'Unknown',
+                vramWarning: vramWarning,
             };
         } catch (e) {
             return { available: false, reason: e.message };
         }
     }
     """
+
+
+In addition to checking `navigator.gpu`, query `adapter.limits.maxBufferSize` to estimate available VRAM. If below 2GB, show a warning: "Your GPU may not have enough memory for the LLM model. The advisor may fail to load."
 
 
 def get_fallback_message() -> str:
@@ -364,7 +374,7 @@ def _build_component_html(
 </style>
 </head>
 <body>
-<div class="advisor-container">
+<div class="advisor-container" role="complementary" aria-label="AI Stats Advisor">
     <div class="advisor-header">
         <div>
             <div>🧠 AI Stats Advisor <span style="font-weight:400;font-size:12px;">(Qwen 2.5 1.5B — runs in your browser)</span></div>
@@ -375,7 +385,7 @@ def _build_component_html(
 
     <div class="loading-bar"><div class="progress" id="loadProgress"></div></div>
 
-    <div class="chat-messages" id="chatMessages">
+    <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-label="Chat messages">
         <div class="message system">
             Ask me about the statistics shown above. I'll explain what they mean
             and what you should do about them. Model loads on first question (~1.6GB download, cached after).
@@ -383,10 +393,10 @@ def _build_component_html(
     </div>
 
     <div class="suggested-questions" id="suggestions">
-        <span class="suggested-q" onclick="askQuestion(this.textContent)">What does this mean?</span>
-        <span class="suggested-q" onclick="askQuestion(this.textContent)">Should I worry about this?</span>
-        <span class="suggested-q" onclick="askQuestion(this.textContent)">What should I do next?</span>
-        <span class="suggested-q" onclick="askQuestion(this.textContent)">Is this normal?</span>
+        <span class="suggested-q" role="button" tabindex="0" onclick="askQuestion(this.textContent)" onkeydown="if(event.key==='Enter')askQuestion(this.textContent)">What does this mean?</span>
+        <span class="suggested-q" role="button" tabindex="0" onclick="askQuestion(this.textContent)" onkeydown="if(event.key==='Enter')askQuestion(this.textContent)">Should I worry about this?</span>
+        <span class="suggested-q" role="button" tabindex="0" onclick="askQuestion(this.textContent)" onkeydown="if(event.key==='Enter')askQuestion(this.textContent)">What should I do next?</span>
+        <span class="suggested-q" role="button" tabindex="0" onclick="askQuestion(this.textContent)" onkeydown="if(event.key==='Enter')askQuestion(this.textContent)">Is this normal?</span>
     </div>
 
     <div class="input-area">
@@ -623,6 +633,8 @@ git commit -m "feat(dashboard): add WebGPU LLM stats advisor component (Qwen 2.5
 ---
 
 ## Task 3: Integrate LLM Advisor into Dashboard Pages
+
+> **Testing note:** The inline JavaScript (350+ lines) in `render_llm_advisor()` cannot be tested with Python unit tests alone. Add a smoke test at `tests/dashboard/test_llm_advisor_js.py` that extracts the HTML string and validates: (1) all interactive elements have `id` attributes, (2) `navigator.gpu` check is present, (3) error handler functions are defined, (4) ARIA labels exist on interactive elements (chat input, send button, suggested questions). Full browser testing requires Playwright (optional but recommended for CI).
 
 **Files:**
 - Modify: `packages/dashboard/src/dashboard/pages/05_feature_importance.py`

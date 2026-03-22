@@ -1,0 +1,18 @@
+[project]
+name = "dashboard"
+version = "0.1.0"
+description = "Streamlit dashboard and forms"
+requires-python = ">=3.11"
+dependencies = [
+    "schemas",
+    "transforms",
+    "backends",
+    "streamlit>=1.35.0",
+    "plotly>=5.18.0",
+    "requests>=2.31.0",
+]
+
+[tool.uv.sources]
+schemas = { workspace = true }
+transforms = { workspace = true }
+backends = { workspace = true }

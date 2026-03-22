@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 4 of 10**
+
 **Goal:** Build a data quality library and Streamlit UI that validates incoming data against learned schemas, detects anomalies (drift, outliers, missing data spikes), enforces business rules, and produces actionable quality reports — so that bad data is caught before it enters the training or inference pipelines.
 
 **Architecture:** A `data_quality` package provides three layers: schema validation (column types, nullability, value ranges learned from training data), statistical profiling (distribution drift detection via KL divergence and KS tests, outlier flagging, missing data analysis), and business rules (NFL-specific constraints like valid yard lines, valid quarters, etc.). Each layer returns structured `ValidationResult` objects that the Streamlit pages render as red/yellow/green dashboards. The profiling layer uses Ibis for pushdown-compatible statistics. A `ReferenceProfile` captures the "expected" distribution from training data and is snapshotted alongside the model.
@@ -811,17 +813,44 @@ from data_quality.profiler import DataProfile
 
 @dataclass
 class ReferenceProfile:
-    """A named, timestamped reference profile."""
+    """A named, timestamped, versioned reference profile.
+
+    Tracks metadata about when and how the profile was created,
+    enabling staleness detection and compatibility checks.
+    """
 
     name: str
     created_at: str
     profile: DataProfile
+    profile_version: str = "1.0.0"          # Semver — bump on schema changes
+    row_count: int | None = None            # Source data row count
+    source_description: str = ""            # E.g., "training data 2019-2023"
+    model_version: str | None = None        # Which model this profile was created with
+
+    def staleness_days(self) -> int | None:
+        """How many days old is this profile?"""
+        try:
+            created = datetime.fromisoformat(self.created_at)
+            return (datetime.now(timezone.utc) - created).days
+        except (ValueError, TypeError):
+            return None
+
+    def warn_if_stale(self, max_days: int = 30) -> str | None:
+        """Return a warning message if profile is older than max_days."""
+        days = self.staleness_days()
+        if days is not None and days > max_days:
+            return f"Reference profile '{self.name}' is {days} days old (max: {max_days}). Consider regenerating."
+        return None
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
             "created_at": self.created_at,
             "profile": self.profile.to_dict(),
+            "profile_version": self.profile_version,
+            "row_count": self.row_count,
+            "source_description": self.source_description,
+            "model_version": self.model_version,
         }
 
     @classmethod
@@ -830,6 +859,10 @@ class ReferenceProfile:
             name=d["name"],
             created_at=d["created_at"],
             profile=DataProfile.from_dict(d["profile"]),
+            profile_version=d.get("profile_version", "1.0.0"),
+            row_count=d.get("row_count"),
+            source_description=d.get("source_description", ""),
+            model_version=d.get("model_version"),
         )
 
 
@@ -1851,6 +1884,12 @@ from data_quality.report import build_validation_report, OverallStatus
 st.header("🛡️ Data Quality Overview")
 
 # --- Reference Data ---
+# > **Data Loading Standard (cross-plan):** All analysis pages load data in two
+# > modes: (1) Parquet files from the Plan 2 training pipeline (primary), or
+# > (2) CSV upload via `st.file_uploader` (secondary). Both paths produce an
+# > `ibis.Table` for downstream processing. Use a shared
+# > `load_analysis_data(source: Path | UploadedFile) -> ibis.Table` utility to
+# > ensure consistency across Plans 3 and 4.
 st.sidebar.subheader("Reference (Training) Data")
 ref_source = st.sidebar.radio(
     "Reference source",

@@ -1,0 +1,13 @@
+[project]
+name = "transforms"
+version = "0.1.0"
+description = "Shared Ibis transform definitions"
+requires-python = ">=3.11"
+dependencies = [
+    "schemas",
+    "ibis-framework[duckdb]>=9.0.0",
+    "pyarrow>=14.0.0",
+]
+
+[tool.uv.sources]
+schemas = { workspace = true }

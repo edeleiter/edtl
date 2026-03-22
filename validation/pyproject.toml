@@ -1,0 +1,15 @@
+[project]
+name = "validation"
+version = "0.1.0"
+description = "Cross-backend validation harness"
+requires-python = ">=3.11"
+dependencies = [
+    "transforms",
+    "backends",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
+]
+
+[tool.uv.sources]
+transforms = { workspace = true }
+backends = { workspace = true }

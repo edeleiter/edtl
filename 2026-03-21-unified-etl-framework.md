@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 1 of 10**
+
 **Goal:** Build a Python monorepo where feature transforms are defined once in Ibis expressions, executed on Snowflake (training/batch) or DuckDB (real-time inference), exposed via FastAPI, and surfaced through a Streamlit dashboard — with a cross-backend validation harness to guarantee calculation parity.
 
 **Architecture:** A shared `transforms` library defines all feature engineering as Ibis expression graphs. A `backends` module handles Snowflake and DuckDB connection/session management. FastAPI serves inference (real-time via DuckDB, batch via Snowflake). Streamlit provides forms and dashboards. A validation harness runs golden datasets through both backends and asserts parity within configurable tolerance. Reference data (lookup tables, normalization params) is snapshotted from Snowflake to Parquet for DuckDB at inference time.
@@ -429,6 +431,11 @@ class SnowflakeConfig(BaseSettings):
     warehouse: str = ""
     role: str = ""
 
+    @property
+    def is_configured(self) -> bool:
+        """Return True if the minimum required credentials are set."""
+        return bool(self.account and self.user and self.password)
+
 
 class DuckDBConfig(BaseSettings):
     """DuckDB connection settings."""
@@ -571,6 +578,15 @@ class SnowflakeBackend(Backend):
         self.config = config or SnowflakeConfig()
 
     def connect(self) -> ibis.BaseBackend:
+        # For local development without Snowflake, set `USE_BACKEND=duckdb`
+        # — all features work with DuckDB except training at scale.
+        if not self.config.is_configured:
+            raise ConnectionError(
+                "Snowflake credentials are not configured "
+                "(SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD). "
+                "For local development, use the DuckDB backend instead: "
+                "set USE_BACKEND=duckdb in your environment."
+            )
         conn = ibis.snowflake.connect(
             account=self.config.account,
             user=self.config.user,
@@ -1128,7 +1144,10 @@ computed at training time in Snowflake, snapshotted to Parquet, and
 loaded into DuckDB at inference API startup.
 """
 
+import json
+import warnings
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import ibis
@@ -1143,6 +1162,25 @@ class ReferenceDataManifest:
     """
 
     tables: dict[str, Path] = field(default_factory=dict)
+    snapshot_timestamp: datetime | None = None
+    source_query_hash: str | None = None
+
+    def staleness_days(self) -> float | None:
+        """Return how many days old the snapshot is, or None if unknown."""
+        if self.snapshot_timestamp is None:
+            return None
+        delta = datetime.now(timezone.utc) - self.snapshot_timestamp
+        return delta.total_seconds() / 86400
+
+    def warn_if_stale(self, max_days: int = 30) -> None:
+        """Issue a warning if the snapshot is older than *max_days*."""
+        days = self.staleness_days()
+        if days is not None and days > max_days:
+            warnings.warn(
+                f"Reference data snapshot is {days:.1f} days old "
+                f"(threshold: {max_days} days). Consider re-snapshotting.",
+                stacklevel=2,
+            )
 
     @classmethod
     def from_directory(cls, directory: str | Path) -> "ReferenceDataManifest":
@@ -1151,7 +1189,21 @@ class ReferenceDataManifest:
         for path in sorted(directory.glob("*.parquet")):
             table_name = path.stem
             tables[table_name] = path
-        return cls(tables=tables)
+
+        snapshot_timestamp = None
+        source_query_hash = None
+        manifest_path = directory / "manifest.json"
+        if manifest_path.exists():
+            meta = json.loads(manifest_path.read_text())
+            if "snapshot_timestamp" in meta:
+                snapshot_timestamp = datetime.fromisoformat(meta["snapshot_timestamp"])
+            source_query_hash = meta.get("source_query_hash")
+
+        return cls(
+            tables=tables,
+            snapshot_timestamp=snapshot_timestamp,
+            source_query_hash=source_query_hash,
+        )
 
 
 def load_reference_tables(
@@ -1174,11 +1226,14 @@ def snapshot_table_to_parquet(
     conn: ibis.BaseBackend,
     table_name: str,
     output_path: str | Path,
+    source_query_hash: str | None = None,
 ) -> Path:
     """Snapshot a table from the backend to a local Parquet file.
 
     Typically called against a Snowflake connection at training time
-    to create reference data files for inference.
+    to create reference data files for inference.  A ``manifest.json``
+    is written alongside the Parquet file recording the snapshot
+    timestamp and optional source query hash.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1190,6 +1245,16 @@ def snapshot_table_to_parquet(
 
     arrow_table = pa.Table.from_pandas(result)
     pq.write_table(arrow_table, output_path)
+
+    # Write manifest.json alongside the Parquet file
+    manifest_path = output_path.parent / "manifest.json"
+    manifest_meta: dict[str, str] = {
+        "snapshot_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if source_query_hash is not None:
+        manifest_meta["source_query_hash"] = source_query_hash
+    manifest_path.write_text(json.dumps(manifest_meta, indent=2))
+
     return output_path
 ```
 

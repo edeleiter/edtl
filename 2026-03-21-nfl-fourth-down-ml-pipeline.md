@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 2 of 10**
+
 **Goal:** Build an end-to-end ML pipeline on top of the unified-etl framework that predicts optimal 4th-down decisions (go for it, punt, or field goal) using NFL play-by-play data — demonstrating the full training-on-Snowflake, inference-on-DuckDB workflow with a real, interesting dataset.
 
 **Architecture:** An `nfl` package extends the base `transforms` library with NFL-specific features. An `ml` package handles model training (XGBoost), evaluation, and serialization. The training pipeline ingests nflverse play-by-play data into Snowflake, applies Ibis transforms for feature engineering, trains the model, and snapshots reference data. The inference API accepts game-state inputs and returns go/punt/kick recommendations with probabilities. The Streamlit dashboard adds an interactive 4th-down calculator page.
@@ -162,6 +164,8 @@ backends = { workspace = true }
 ```
 
 > **Note for the engineer:** We're using `nfl-data-py` rather than `nflreadpy` because it's on PyPI and pip-installable. The library was archived in Sep 2025 but is still functional for downloading historical data. If installation fails, switch to downloading Parquet files directly from the nflverse-data GitHub releases — the ingest module is designed to support both paths.
+
+> **Fallback strategy:** `nfl-data-py` wraps nflverse data. If the package is archived or unavailable at install time, fall back to direct Parquet downloads from `https://github.com/nflverse/nflverse-data/releases`. Add a `USE_DIRECT_NFLVERSE=true` environment variable to bypass `nfl-data-py` and download Parquet files directly. The column schema is identical either way.
 
 **Step 3: Write the failing test**
 
@@ -836,6 +840,12 @@ A more sophisticated approach would label plays by which decision
 estimation. For this educational exercise, we use the actual decision
 as a proxy — coaches are generally rational, and the model will learn
 the decision boundary even if some individual labels are "wrong".
+
+**Important:** This means the model predicts what coaches DO, not what
+they SHOULD do. This is intentional for the prediction use case. The
+EPA comparison in evaluation (Task 6) measures whether the model's
+recommended decision has higher expected EPA than the coach's actual
+decision. Document this in the model metadata.
 """
 
 import ibis
@@ -853,11 +863,19 @@ INVERSE_LABEL_MAP = {v: k for k, v in LABEL_MAP.items()}
 
 
 def add_target_label(table: ir.Table) -> ir.Table:
-    """Map the decision column to integer labels for classification."""
+    """Map the decision column to integer labels for classification.
+
+    Rows with unmapped decision values get NULL target. These should be
+    filtered out before training — log a warning with the count of
+    excluded rows rather than silently dropping them.
+    """
     case_expr = ibis.case()
     for label, code in LABEL_MAP.items():
         case_expr = case_expr.when(table["decision"] == label, code)
-    return table.mutate(**{TARGET_COLUMN: case_expr.else_(ibis.null()).end()})
+    result = table.mutate(**{TARGET_COLUMN: case_expr.else_(ibis.null()).end()})
+    # Caller should check: null_count = result.filter(result[TARGET_COLUMN].isnull()).count()
+    # and log: f"{null_count} plays excluded due to unmapped decision values"
+    return result
 ```
 
 **Step 4: Run tests to verify they pass**
@@ -1248,6 +1266,8 @@ Hyperparameters are configurable, with sensible defaults for this
 problem size (~50K-200K training samples, 17 features, 3 classes).
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
@@ -1265,7 +1285,7 @@ DEFAULT_HYPERPARAMS = {
     "num_class": 3,
     "eval_metric": "mlogloss",
     "random_state": 42,
-    "n_jobs": -1,
+    "n_jobs": min(os.cpu_count() or 4, 4),  # Cap at 4 to avoid exhausting container CPU limits
 }
 
 

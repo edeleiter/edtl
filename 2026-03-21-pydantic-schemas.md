@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Plan 9 of 10**
+**Plan 9 of 10** (implement in two waves — see Implementation Wave Strategy)
 
 **Goal:** Define every data contract in the unified-etl platform as a Pydantic v2 model in a central `schemas` package, providing runtime validation, consistent serialization (JSON, Arrow IPC, Parquet), auto-generated documentation, and a single source of truth for what every component expects and produces.
 
@@ -14,7 +14,27 @@
 - **Settings:** pydantic-settings (environment-based configuration)
 - **Testing:** pytest, hypothesis (property-based testing for validators)
 
-**Prerequisite:** None — this plan should be implemented FIRST (before or alongside Plan 1), as all other plans depend on these models. Plans 1-8 should reference `schemas` models instead of defining their own dataclasses.
+**Prerequisite:** None — but see Implementation Wave Strategy below. This plan is implemented in two waves to resolve the dependency ordering with Plans 1-8.
+
+---
+
+## Implementation Wave Strategy
+
+This plan cannot be implemented all-at-once because it defines models for packages that don't exist yet. Instead, implement in two waves:
+
+**Wave 1 (Tasks 1-3)** — Implement ALONGSIDE Plan 1 Tasks 1-6:
+- Task 1: Package scaffolding + base classes (`_base.py`)
+- Task 2: Game state + prediction models (`game.py`, `prediction.py`)
+- Task 3: Transform + feature models (`transforms.py`, `features.py`)
+
+These models describe the core data contracts that Plan 1 (transforms, backends) and Plan 2 (NFL pipeline, ML) will consume. Plan 1 Tasks 1-4 can use lightweight internal types initially, then switch to `schemas` imports once Wave 1 tasks are complete.
+
+**Wave 2 (Tasks 4-6)** — Implement AFTER the plans that define the domain logic:
+- Task 4: Quality models (`quality.py`) → implement after Plan 4 (Data Quality)
+- Task 5: Monitoring + alert models (`monitoring.py`, `alerts.py`) → implement after Plan 7 (Monitoring Dashboard)
+- Task 6: Interpretation + config + cache models → implement after Plan 5 (Interpretation Engine)
+
+**Task 7 (implied): Migration sweep** — After all waves, grep for remaining `from dataclasses import` and local model definitions across all packages. Replace with `schemas` imports. This is Phase 7 of the implementation roadmap.
 
 ---
 
@@ -315,6 +335,14 @@ class PolarsConvertible(BaseModel):
     Provides class methods to convert a list of model instances to/from
     a Polars DataFrame. This bridges Pydantic's row-oriented validation
     with Polars's columnar efficiency.
+
+    **Limitation:** `to_polars()` uses `model_dump()` which converts nested
+    Pydantic models to dicts — Polars represents these as `Struct` columns.
+    For models with nested models (e.g., `PredictionLogEntry` containing
+    `GameState`), either:
+    (a) Override `to_polars()` in the specific model to flatten fields, or
+    (b) Use the `to_flat_polars()` pattern (see `PredictionLogEntry` in
+        `prediction.py` for an example).
     """
 
     @classmethod
@@ -1554,14 +1582,334 @@ git commit -m "feat(schemas): add data quality, drift, profiling, and validation
 - Test: `tests/schemas/test_monitoring.py`
 - Test: `tests/schemas/test_alerts.py`
 
-> **Note for the engineer:** These tests follow the same pattern as Tasks 2-4. Implement the models based on the dataclass definitions in Plans 7 (model-monitoring-dashboard). Convert every `@dataclass` to a `StrictModel` subclass. Key models: `PredictionRecord`, `PerformanceSnapshot`, `PerformanceTimeline`, `PredictionDriftResult`, `PSIResult`, `PSIReport`, `SegmentedReport`, `DecaySignal`, `RetrainRecommendation`, `AlertThresholds`, `Alert`, `AlertHistory`.
+> Converted from Plan 7's `@dataclass` definitions to `StrictModel` subclasses. Key changes from Plan 7: fields use constrained types (`Probability`, `NonNegativeInt`), models are immutable (frozen), `to_dict()` methods replaced by Pydantic's `model_dump()`.
 
-> Tests should validate field constraints, serialization round-trips, and computed properties.
+**Step 1:** Write failing tests (`tests/schemas/test_monitoring.py`):
 
-**Step 1:** Write failing tests for all monitoring and alert models.
+```python
+# tests/schemas/test_monitoring.py
+"""Tests for monitoring + alert schema models."""
+
+import datetime
+
+import pytest
+
+from schemas.monitoring import (
+    PredictionRecord,
+    PerformanceSnapshot,
+    PerformanceTimeline,
+    PSIBucket,
+    PSIResult,
+    RetrainUrgency,
+    RetrainRecommendation,
+)
+from schemas.alerts import Alert, AlertLevel, AlertThresholds, AlertHistory
+
+
+class TestPredictionRecord:
+    def test_valid_record(self):
+        rec = PredictionRecord(
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            prediction=0,
+            probabilities=[0.7, 0.2, 0.1],
+            features={"yardline_100": 45, "ydstogo": 3},
+        )
+        assert rec.prediction == 0
+        assert len(rec.probabilities) == 3
+
+    def test_probabilities_must_sum_near_one(self):
+        with pytest.raises(ValueError, match="sum"):
+            PredictionRecord(
+                timestamp=datetime.datetime.now(datetime.timezone.utc),
+                prediction=0,
+                probabilities=[0.5, 0.1, 0.1],  # sums to 0.7
+                features={},
+            )
+
+    def test_serialization_round_trip(self):
+        rec = PredictionRecord(
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            prediction=1,
+            probabilities=[0.2, 0.6, 0.2],
+            features={"score_diff": -7},
+            game_id="2024_01_KC_DET",
+            model_version="v1",
+        )
+        data = rec.model_dump()
+        restored = PredictionRecord.model_validate(data)
+        assert restored == rec
+
+
+class TestPerformanceSnapshot:
+    def test_valid_snapshot(self):
+        snap = PerformanceSnapshot(
+            accuracy=0.75,
+            f1_macro=0.72,
+            n_samples=500,
+            confusion_matrix=[[100, 10, 5], [8, 200, 12], [3, 7, 155]],
+        )
+        assert snap.accuracy == 0.75
+
+    def test_accuracy_must_be_probability(self):
+        with pytest.raises(ValueError):
+            PerformanceSnapshot(
+                accuracy=1.5,  # invalid
+                f1_macro=0.72,
+                n_samples=500,
+                confusion_matrix=[[100]],
+            )
+
+    def test_n_samples_must_be_positive(self):
+        with pytest.raises(ValueError):
+            PerformanceSnapshot(
+                accuracy=0.75,
+                f1_macro=0.72,
+                n_samples=-1,
+                confusion_matrix=[[100]],
+            )
+
+
+class TestPerformanceTimeline:
+    def test_empty_timeline(self):
+        tl = PerformanceTimeline(snapshots=[])
+        assert len(tl.snapshots) == 0
+
+    def test_latest_returns_most_recent(self):
+        s1 = PerformanceSnapshot(
+            accuracy=0.70, f1_macro=0.68, n_samples=100,
+            confusion_matrix=[[50, 10], [5, 35]],
+            window_start=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+        )
+        s2 = PerformanceSnapshot(
+            accuracy=0.75, f1_macro=0.72, n_samples=200,
+            confusion_matrix=[[80, 20], [10, 90]],
+            window_start=datetime.datetime(2024, 2, 1, tzinfo=datetime.timezone.utc),
+        )
+        tl = PerformanceTimeline(snapshots=[s1, s2])
+        assert tl.latest.accuracy == 0.75
+
+
+class TestPSIResult:
+    def test_valid_result(self):
+        r = PSIResult(feature="yardline_100", psi=0.08, severity="warning")
+        assert r.severity in ("none", "warning", "critical")
+
+    def test_invalid_severity(self):
+        with pytest.raises(ValueError):
+            PSIResult(feature="x", psi=0.01, severity="bad")
+
+
+class TestAlert:
+    def test_valid_alert(self):
+        a = Alert(
+            level=AlertLevel.YELLOW,
+            category="performance",
+            message="Accuracy dropped 4%",
+            metric_name="accuracy",
+            metric_value=0.71,
+            threshold=0.75,
+        )
+        assert a.level == AlertLevel.YELLOW
+
+    def test_alert_history_latest_level(self):
+        h = AlertHistory(alerts=[
+            Alert(level=AlertLevel.GREEN, category="performance",
+                  message="OK", metric_name="accuracy",
+                  metric_value=0.80, threshold=0.75),
+            Alert(level=AlertLevel.RED, category="performance",
+                  message="Critical", metric_name="accuracy",
+                  metric_value=0.55, threshold=0.60),
+        ])
+        assert h.latest_level == AlertLevel.RED
+
+
+class TestRetrainRecommendation:
+    def test_valid_recommendation(self):
+        r = RetrainRecommendation(
+            urgency=RetrainUrgency.RECOMMENDED,
+            score=65,
+            reasons=["Accuracy dropped below warning threshold"],
+            signal_scores={"performance": 30, "drift": 20, "psi": 15},
+        )
+        assert r.score == 65
+
+    def test_score_bounds(self):
+        with pytest.raises(ValueError):
+            RetrainRecommendation(
+                urgency=RetrainUrgency.NONE,
+                score=150,  # invalid: must be 0-100
+                reasons=[],
+            )
+```
+
 **Step 2:** Run tests, verify fail.
-**Step 3:** Implement `schemas/monitoring.py` with all monitoring models from Plan 7.
-**Step 4:** Implement `schemas/alerts.py` with alert models from Plan 7.
+
+**Step 3:** Implement `schemas/monitoring.py`:
+
+```python
+# packages/schemas/src/schemas/monitoring.py
+"""Monitoring models — converted from Plan 7 dataclasses."""
+
+import datetime
+from enum import Enum
+from typing import Any
+
+from pydantic import Field, field_validator
+
+from schemas._base import (
+    StrictModel, TimestampMixin, MutableModel,
+    Probability, NonNegativeInt, NonNegativeFloat,
+)
+
+
+class PredictionRecord(TimestampMixin, StrictModel):
+    """A single prediction to be logged."""
+
+    prediction: int
+    probabilities: list[Probability]
+    features: dict[str, Any]
+    game_id: str = ""
+    model_version: str = ""
+    request_id: str = ""
+
+    @field_validator("probabilities")
+    @classmethod
+    def probabilities_must_sum_to_one(cls, v: list[float]) -> list[float]:
+        if v and abs(sum(v) - 1.0) > 0.01:
+            raise ValueError(f"Probabilities must sum to ~1.0, got {sum(v):.4f}")
+        return v
+
+
+class PerformanceSnapshot(StrictModel):
+    """Performance metrics for a single time window."""
+
+    accuracy: Probability
+    f1_macro: Probability
+    n_samples: NonNegativeInt
+    confusion_matrix: list[list[NonNegativeInt]]
+    per_class_f1: dict[str, float] | None = None
+    per_class_precision: dict[str, float] | None = None
+    per_class_recall: dict[str, float] | None = None
+    window_start: datetime.datetime | None = None
+    window_end: datetime.datetime | None = None
+
+
+class PerformanceTimeline(StrictModel):
+    """Ordered sequence of performance snapshots."""
+
+    snapshots: list[PerformanceSnapshot] = Field(default_factory=list)
+
+    @property
+    def latest(self) -> PerformanceSnapshot | None:
+        return self.snapshots[-1] if self.snapshots else None
+
+
+class PSIBucket(StrictModel):
+    """Details for a single PSI histogram bucket."""
+
+    bin_low: float
+    bin_high: float
+    expected_pct: NonNegativeFloat
+    actual_pct: NonNegativeFloat
+    psi_contribution: NonNegativeFloat
+
+
+PSISeverity = str  # Literal["none", "warning", "critical"] — kept as str for flexibility
+
+
+class PSIResult(StrictModel):
+    """PSI computation result for a single feature."""
+
+    feature: str
+    psi: NonNegativeFloat
+    severity: str = Field(pattern=r"^(none|warning|critical)$")
+    bucket_details: list[PSIBucket] | None = None
+
+
+class PSIReport(StrictModel):
+    """PSI results across all monitored features."""
+
+    results: list[PSIResult]
+    timestamp: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+
+    @property
+    def critical_features(self) -> list[str]:
+        return [r.feature for r in self.results if r.severity == "critical"]
+
+
+class RetrainUrgency(str, Enum):
+    NONE = "none"
+    RECOMMENDED = "recommended"
+    URGENT = "urgent"
+
+
+class RetrainRecommendation(StrictModel):
+    """Scored retrain recommendation with supporting reasons."""
+
+    urgency: RetrainUrgency
+    score: int = Field(ge=0, le=100)
+    reasons: list[str] = Field(default_factory=list)
+    signal_scores: dict[str, int] = Field(default_factory=dict)
+```
+
+**Step 4:** Implement `schemas/alerts.py`:
+
+```python
+# packages/schemas/src/schemas/alerts.py
+"""Alert models — converted from Plan 7 dataclasses."""
+
+import datetime
+from enum import Enum
+
+from pydantic import Field
+
+from schemas._base import StrictModel, TimestampMixin
+
+
+class AlertLevel(str, Enum):
+    GREEN = "green"
+    YELLOW = "yellow"
+    RED = "red"
+
+
+class AlertThresholds(StrictModel):
+    """Thresholds for traffic-light alerting."""
+
+    accuracy_yellow: float = 0.03
+    accuracy_red: float = 0.05
+    f1_yellow: float = 0.05
+    f1_red: float = 0.10
+    prediction_kl_yellow: float = 0.05
+    prediction_kl_red: float = 0.15
+    psi_yellow: float = 0.10
+    psi_red: float = 0.25
+
+
+class Alert(TimestampMixin, StrictModel):
+    """A single monitoring alert."""
+
+    level: AlertLevel
+    category: str = Field(pattern=r"^(performance|prediction_drift|feature_drift)$")
+    message: str
+    metric_name: str
+    metric_value: float | str
+    threshold: float | str
+
+
+class AlertHistory(StrictModel):
+    """Collection of alerts over time."""
+
+    alerts: list[Alert] = Field(default_factory=list)
+
+    @property
+    def latest_level(self) -> AlertLevel:
+        if not self.alerts:
+            return AlertLevel.GREEN
+        return max(self.alerts, key=lambda a: a.created_at).level
+```
+
 **Step 5:** Run tests, verify pass.
 **Step 6:** Commit: `feat(schemas): add monitoring + alert models`
 
@@ -1659,6 +2007,7 @@ class RegistryEntry(StrictModel):
 # packages/schemas/src/schemas/config.py
 """Application configuration models using pydantic-settings."""
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -1667,11 +2016,16 @@ class SnowflakeConfig(BaseSettings):
 
     account: str = ""
     user: str = ""
-    password: str = ""
+    password: SecretStr = SecretStr("")  # Hidden from repr/logs
     database: str = ""
     schema_name: str = "PUBLIC"
     warehouse: str = ""
     role: str = ""
+
+    @property
+    def is_configured(self) -> bool:
+        """Check if minimum Snowflake credentials are present."""
+        return bool(self.account and self.user and self.password.get_secret_value())
 
 
 class DuckDBConfig(BaseSettings):

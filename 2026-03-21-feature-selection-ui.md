@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Plan 3 of 10**
+
 **Goal:** Build a feature analysis library and Streamlit UI that lets users explore feature importance (Gini, permutation, SHAP), visualize feature distributions, detect multicollinearity, and interactively select/deselect features — then retrain the model with the selected subset and compare evaluation metrics.
 
 **Architecture:** A `feature_analysis` module in the `ml` package computes importance scores, correlation matrices, and distribution statistics — all as pure functions returning DataFrames so they're testable and UI-agnostic. Streamlit pages consume these functions and render interactive Plotly charts. A feature selection "session" lets users toggle features on/off, retrain in-browser, and compare before/after metrics side-by-side. All analysis runs on DuckDB via Ibis for distribution stats, and on materialized Pandas DataFrames for sklearn/SHAP computations.
@@ -1084,6 +1086,12 @@ from nfl.features import MODEL_FEATURE_COLUMNS
 st.header("📊 Feature Importance Explorer")
 
 # --- Load Model + Data ---
+# > **Data Loading Standard (cross-plan):** All analysis pages load data in two
+# > modes: (1) Parquet files from the Plan 2 training pipeline (primary), or
+# > (2) CSV upload via `st.file_uploader` (secondary). Both paths produce an
+# > `ibis.Table` for downstream processing. Use a shared
+# > `load_analysis_data(source: Path | UploadedFile) -> ibis.Table` utility to
+# > ensure consistency across Plans 3 and 4.
 model_dir = st.sidebar.text_input("Model directory", value="models/latest")
 data_path = st.sidebar.text_input("Training data (Parquet)", value="data/pbp/")
 
@@ -1109,6 +1117,9 @@ st.info(
 )
 
 # Try to load training data
+# **Important:** Permutation importance MUST be computed on held-out data
+# (test set), not training data. Computing on training data produces biased
+# estimates that overstate features the model has memorized.
 has_data = False
 X_sample = None
 y_sample = None
@@ -1116,6 +1127,7 @@ y_sample = None
 if Path(data_path).exists():
     try:
         import ibis
+        from sklearn.model_selection import train_test_split
 
         parquet_files = sorted(Path(data_path).glob("*.parquet"))
         if parquet_files:
@@ -1124,13 +1136,17 @@ if Path(data_path).exists():
             con = ibis.duckdb.connect()
             dataset = con.execute(build_training_dataset(ibis.memtable(raw)))
             X_full, y_full = split_features_target(dataset)
-            # Subsample for speed
-            n_sample = min(2000, len(X_full))
-            idx = np.random.RandomState(42).choice(len(X_full), n_sample, replace=False)
-            X_sample = X_full.iloc[idx].reset_index(drop=True)
-            y_sample = y_full.iloc[idx].reset_index(drop=True)
+            # Split into train/test — permutation importance uses the test set
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_full, y_full, test_size=0.2, random_state=42
+            )
+            # Subsample the held-out test set for speed
+            n_sample = min(2000, len(X_test))
+            idx = np.random.RandomState(42).choice(len(X_test), n_sample, replace=False)
+            X_sample = X_test.iloc[idx].reset_index(drop=True)
+            y_sample = y_test.iloc[idx].reset_index(drop=True)
             has_data = True
-            st.success(f"Loaded {len(X_full):,} plays, using {n_sample:,} sample")
+            st.success(f"Loaded {len(X_full):,} plays, using {n_sample:,} held-out test samples")
     except Exception as e:
         st.warning(f"Could not load training data: {e}")
 
@@ -1151,7 +1167,30 @@ with st.spinner("Computing importance..."):
         result = compute_permutation_importance(model, X_sample, y_sample, n_repeats=n_repeats)
     elif method == "SHAP" and has_data:
         max_shap = st.slider("SHAP sample size", 50, 500, 200)
-        result = compute_shap_importance(model, X_sample, max_samples=max_shap)
+        # NOTE: The 500-sample default covers ~1% of typical training data.
+        # For more reliable SHAP estimates, consider using 1000+ samples
+        # when compute budget allows.
+
+        # Cache SHAP results keyed on selected features to avoid recomputation.
+        # Use @st.cache_data with a key like tuple(sorted(selected_features)).
+        progress = st.progress(0)
+
+        import time as _time
+        _shap_start = _time.monotonic()
+        # If SHAP computation exceeds 60 seconds, fall back to a smaller
+        # sample size with a warning.
+        try:
+            result = compute_shap_importance(model, X_sample, max_samples=max_shap)
+            _shap_elapsed = _time.monotonic() - _shap_start
+            if _shap_elapsed > 60:
+                st.warning(
+                    f"SHAP took {_shap_elapsed:.0f}s. Falling back to smaller sample."
+                )
+                result = compute_shap_importance(model, X_sample, max_samples=max(50, max_shap // 4))
+        except Exception as shap_err:
+            st.error(f"SHAP computation failed: {shap_err}")
+            st.stop()
+        progress.progress(100)
     else:
         st.stop()
 
@@ -1419,7 +1458,11 @@ with tab_vif:
     st.subheader("Variance Inflation Factor (VIF)")
     st.caption(
         "VIF measures multicollinearity. VIF > 5 = investigate, VIF > 10 = serious issue. "
-        "Unlike correlation, VIF detects collinearity involving 3+ features."
+        "Unlike correlation, VIF detects collinearity involving 3+ features. "
+        "**Note:** High VIF alone does not mean 'remove this feature'. Cross-reference "
+        "with importance: a high-VIF feature that ranks in the top 5 by importance should "
+        "be flagged as 'high collinearity but important — consider keeping'. A high-VIF "
+        "feature that ranks in the bottom half is safe to remove."
     )
 
     with st.spinner("Computing VIF (this fits a regression per feature)..."):
@@ -1575,6 +1618,8 @@ with col_info:
 st.subheader("Evaluation")
 
 if st.button("Train & Evaluate", type="primary", use_container_width=True):
+    # Key cache invalidation on the current feature selection
+    eval_cache_key = tuple(sorted(selected))
     with st.spinner("Training models and cross-validating..."):
         # Evaluate both full and selected subsets
         subsets = {
