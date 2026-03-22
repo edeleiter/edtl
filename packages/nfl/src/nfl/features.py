@@ -7,6 +7,7 @@ and execute natively on DuckDB. The validation harness proves parity.
 import ibis
 import ibis.expr.types as ir
 
+# Note: quarter_seconds_remaining excluded — redundant with game_seconds_remaining and half_seconds_remaining
 # The 17 features the model expects, in exact order.
 # First 8 are raw game-state fields, last 9 are engineered.
 MODEL_FEATURE_COLUMNS = [

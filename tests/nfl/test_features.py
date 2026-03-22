@@ -13,11 +13,6 @@ from nfl.features import (
 
 
 @pytest.fixture
-def con():
-    return ibis.duckdb.connect()
-
-
-@pytest.fixture
 def game_state_table():
     """Synthetic game states for testing feature transforms."""
     return ibis.memtable({
@@ -37,14 +32,14 @@ def test_model_feature_columns_count():
     assert len(MODEL_FEATURE_COLUMNS) == 17
 
 
-def test_build_fourth_down_features_adds_all_columns(con, game_state_table):
-    result = con.execute(build_fourth_down_features(game_state_table))
+def test_build_fourth_down_features_adds_all_columns(duckdb_conn, game_state_table):
+    result = duckdb_conn.execute(build_fourth_down_features(game_state_table))
     for col in MODEL_FEATURE_COLUMNS:
         assert col in result.columns, f"Missing column: {col}"
 
 
-def test_field_position_features(con, game_state_table):
-    result = con.execute(add_field_position_features(game_state_table))
+def test_field_position_features(duckdb_conn, game_state_table):
+    result = duckdb_conn.execute(add_field_position_features(game_state_table))
     # yardline_100=35 → is_opponent_territory=1 (<=50), is_fg_range=1 (<=40)
     assert result["is_opponent_territory"].iloc[0] == 1
     assert result["is_fg_range"].iloc[0] == 1
@@ -57,8 +52,8 @@ def test_field_position_features(con, game_state_table):
     assert result["is_short_yardage"].iloc[1] == 0
 
 
-def test_game_state_features(con, game_state_table):
-    result = con.execute(add_game_state_features(game_state_table))
+def test_game_state_features(duckdb_conn, game_state_table):
+    result = duckdb_conn.execute(add_game_state_features(game_state_table))
     # score_diff=-7 → is_trailing=1, is_two_score_game=0 (abs(7)<9)
     assert result["is_trailing"].iloc[0] == 1
     assert result["is_two_score_game"].iloc[0] == 0
@@ -69,8 +64,8 @@ def test_game_state_features(con, game_state_table):
     assert result["abs_score_diff"].iloc[0] == 7
 
 
-def test_time_features(con, game_state_table):
-    result = con.execute(add_time_features(game_state_table))
+def test_time_features(duckdb_conn, game_state_table):
+    result = duckdb_conn.execute(add_time_features(game_state_table))
     # qtr=2 → is_second_half=0
     assert result["is_second_half"].iloc[0] == 0
     # qtr=4 → is_second_half=1

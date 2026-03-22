@@ -8,11 +8,6 @@ from nfl.target import add_target_label, TARGET_COLUMN, LABEL_MAP, INVERSE_LABEL
 
 
 @pytest.fixture
-def con():
-    return ibis.duckdb.connect()
-
-
-@pytest.fixture
 def classified_table():
     """Table with decision column (output of classify_decision)."""
     return ibis.memtable({
@@ -21,8 +16,8 @@ def classified_table():
     })
 
 
-def test_add_target_label(con, classified_table):
-    result = con.execute(add_target_label(classified_table))
+def test_add_target_label(duckdb_conn, classified_table):
+    result = duckdb_conn.execute(add_target_label(classified_table))
     assert TARGET_COLUMN in result.columns
     labels = list(result[TARGET_COLUMN])
     assert labels == [0, 1, 2, 0]
@@ -38,7 +33,7 @@ def test_inverse_label_map():
         assert INVERSE_LABEL_MAP[code] == label
 
 
-def test_unknown_decision_gets_null(con):
+def test_unknown_decision_gets_null(duckdb_conn):
     table = ibis.memtable({"decision": ["unknown_play"], "ydstogo": [5]})
-    result = con.execute(add_target_label(table))
+    result = duckdb_conn.execute(add_target_label(table))
     assert result[TARGET_COLUMN].iloc[0] is None or pd.isna(result[TARGET_COLUMN].iloc[0])

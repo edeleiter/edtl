@@ -7,11 +7,6 @@ from nfl.fourth_down_filter import filter_fourth_downs, classify_decision
 
 
 @pytest.fixture
-def con():
-    return ibis.duckdb.connect()
-
-
-@pytest.fixture
 def pbp_table():
     """Synthetic PBP data with various downs and play types."""
     return ibis.memtable({
@@ -23,17 +18,17 @@ def pbp_table():
     })
 
 
-def test_filter_fourth_downs(con, pbp_table):
-    result = con.execute(filter_fourth_downs(pbp_table))
+def test_filter_fourth_downs(duckdb_conn, pbp_table):
+    result = duckdb_conn.execute(filter_fourth_downs(pbp_table))
     # Should keep only down==4 with valid play types (not penalty)
     assert len(result) == 4
     assert all(result["down"] == 4)
 
 
-def test_classify_decision(con, pbp_table):
+def test_classify_decision(duckdb_conn, pbp_table):
     filtered = filter_fourth_downs(pbp_table)
     classified = classify_decision(filtered)
-    result = con.execute(classified)
+    result = duckdb_conn.execute(classified)
     decisions = list(result["decision"])
     assert decisions.count("go_for_it") == 2  # pass + run
     assert decisions.count("punt") == 1

@@ -3,9 +3,11 @@
 import ibis
 import ibis.expr.types as ir
 
-DECISION_GO = "go_for_it"
-DECISION_PUNT = "punt"
-DECISION_FG = "field_goal"
+from schemas._base import Decision
+
+DECISION_GO = Decision.GO_FOR_IT.value
+DECISION_PUNT = Decision.PUNT.value
+DECISION_FG = Decision.FIELD_GOAL.value
 
 _GO_PLAY_TYPES = ("pass", "run", "qb_kneel", "qb_spike")
 

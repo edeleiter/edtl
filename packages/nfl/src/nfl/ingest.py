@@ -1,4 +1,8 @@
-"""NFL play-by-play data ingestion via nfl-data-py."""
+"""NFL play-by-play data ingestion via nfl-data-py.
+
+Data provided by nflverse (https://github.com/nflverse/nflverse-data).
+Licensed under CC-BY-4.0 / CC-BY-SA-4.0.
+"""
 
 from pathlib import Path
 

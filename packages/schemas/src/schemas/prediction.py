@@ -3,7 +3,7 @@
 import datetime
 
 import polars as pl
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from schemas._base import (
     StrictModel,
@@ -94,3 +94,25 @@ class PredictionOutcome(TimestampMixin, StrictModel):
     actual_decision: Decision
     was_correct: bool
     epa_result: float | None = None
+
+
+class EvaluationReport(StrictModel):
+    """Evaluation results for a trained model."""
+    model_config = ConfigDict(strict=False)  # Allow numpy/list coercion
+
+    accuracy: float
+    confusion_matrix: list[list[float]]
+    class_report: str
+    feature_importances: dict[str, float]
+
+    def summary(self) -> str:
+        lines = [
+            f"Accuracy: {self.accuracy:.4f}",
+            "",
+            "Confusion Matrix:",
+        ]
+        for row in self.confusion_matrix:
+            lines.append("  " + str(row))
+        lines.append("")
+        lines.append(self.class_report)
+        return "\n".join(lines)
